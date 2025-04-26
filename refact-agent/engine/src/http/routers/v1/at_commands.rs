@@ -1,6 +1,3 @@
-use axum::extract::OriginalUri;
-use axum::body::Bytes;
-use crate::at_commands::execute_at::run_at_commands_locally;
 use axum::response::Result;
 use axum::Extension;
 use hyper::{Body, Response, StatusCode};
@@ -16,6 +13,7 @@ use itertools::Itertools;
 use tokenizers::Tokenizer;
 use tracing::info;
 
+use crate::at_commands::execute_at::run_at_commands_locally;
 use crate::cached_tokenizers;
 use crate::at_commands::at_commands::AtCommandsContext;
 use crate::at_commands::execute_at::{execute_at_commands_in_query, parse_words_from_line};
@@ -44,7 +42,7 @@ struct CommandCompletionResponse {
     is_cmd_executable: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone)]
 struct CommandPreviewPost {
     #[serde(default)]
     pub messages: Vec<Value>,
@@ -145,11 +143,8 @@ async fn count_tokens(tokenizer_arc: Arc<StdRwLock<Tokenizer>>, messages: &Vec<C
 
 pub async fn handle_v1_command_preview(
     Extension(global_context): Extension<Arc<ARwLock<GlobalContext>>>,
-    OriginalUri(orig_uri): OriginalUri,       // capture the request URI
-    body_bytes: Bytes,                        // capture the raw body
+    body_bytes: hyper::body::Bytes,
 ) -> Result<Response<Body>, ScratchError> {
-
-    let raw_body = String::from_utf8_lossy(&body_bytes);
     let post = serde_json::from_slice::<CommandPreviewPost>(&body_bytes)
         .map_err(|e| ScratchError::new(StatusCode::UNPROCESSABLE_ENTITY, format!("JSON problem: {}", e)))?;
     let mut messages = deserialize_messages_from_post(&post.messages)?;
@@ -183,12 +178,7 @@ pub async fn handle_v1_command_preview(
         match tmp {
             Ok(x) => (x.0, x.1.clone()),
             Err(e) => {
-                tracing::warn!(
-                    "can't find model for preview: {} -- uri: {} -- raw POST: {}",
-                    e,
-                    orig_uri,
-                    raw_body
-                );
+                tracing::warn!("can't find model: {}", e);
                 return Err(ScratchError::new(StatusCode::BAD_REQUEST, format!("can't find model: {}", e)))?;
             }
         }
@@ -244,15 +234,15 @@ pub async fn handle_v1_command_preview(
     ).await;
 
     if !cf.is_empty() {
-             let message = ChatMessage {
-                 role: "context_file".to_string(),
-                 content: ChatContent::SimpleText(serde_json::to_string(&cf).unwrap()),
-                 tool_calls: None,
-                 tool_call_id: "".to_string(),
-                 ..Default::default()
-             };
-             preview.push(message.clone());
-         }
+        let message = ChatMessage {
+            role: "context_file".to_string(),
+            content: ChatContent::SimpleText(serde_json::to_string(&cf).unwrap()),
+            tool_calls: None,
+            tool_call_id: "".to_string(),
+            ..Default::default()
+        };
+        preview.push(message.clone());
+    }
 
     let mut highlights = vec![];
     for h in vec_highlights {

@@ -673,22 +673,33 @@ pub fn which_model_to_use<'a>(
     user_wants_model: &str,
     default_model: &str,
 ) -> Result<(String, &'a ModelRecord), String> {
-    let mut take_this_one = default_model;
-    if user_wants_model != "" {
-        take_this_one = user_wants_model;
-    }
-    let no_finetune = strip_model_from_finetune(&take_this_one.to_string());
-    if let Some(model_rec) = models.get(&take_this_one.to_string()) {
-        Ok((take_this_one.to_string(), model_rec))
-    } else if let Some(model_rec) = models.get(&no_finetune) {
-        Ok((take_this_one.to_string(), model_rec))
+    // Determine desired model: user override > default > first available
+    let chosen = if !user_wants_model.is_empty() {
+        user_wants_model.to_string()
+    } else if !default_model.is_empty() {
+        default_model.to_string()
+    } else if let Some(first) = models.keys().next() {
+        first.clone()
     } else {
-        Err(format!(
-            "Model '{}' not found. Server has these models: {:?}",
-            take_this_one,
-            models.keys()
-        ))
+        return Err("No available models".to_string());
+    };
+
+    // Try exact match
+    if let Some(rec) = models.get(&chosen) {
+        return Ok((chosen, rec));
     }
+    // Try stripped (finetune suffix removed) match
+    let stripped = strip_model_from_finetune(&chosen);
+    if let Some(rec) = models.get(&stripped) {
+        return Ok((chosen, rec));
+    }
+
+    // Not found
+    Err(format!(
+        "Model '{}' not found. Server has these models: {:?}",
+        chosen,
+        models.keys().collect::<Vec<_>>()
+    ))
 }
 
 pub fn which_scratchpad_to_use<'a>(

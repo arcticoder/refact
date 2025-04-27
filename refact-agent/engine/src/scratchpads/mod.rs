@@ -91,6 +91,16 @@ pub async fn create_chat_scratchpad(
         result = Box::new(chat_passthrough::ChatPassthrough::new(
             tokenizer_arc.clone(), post, messages, prepend_system_prompt, allow_at, supports_tools, supports_clicks
         ));
+    } else if scratchpad_name == "FIM-PSM" {
+        // our model wants FIM-PSM in chat—just use the generic chat scratchpad
+        tracing::info!(scratchpad = scratchpad_name, "Using CHAT-GENERIC for FIM-PSM");
+        result = Box::new(chat_generic::GenericChatScratchpad::new(
+            tokenizer_arc.clone(),
+            post,
+            messages,
+            prepend_system_prompt,
+            allow_at,
+        ));
     } else {
         return Err(format!("This rust binary doesn't have chat scratchpad \"{}\" compiled in", scratchpad_name));
     }

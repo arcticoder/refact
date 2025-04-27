@@ -525,68 +525,13 @@ pub async fn load_caps(
     } else {
         (buf, caps_url) = load_caps_buf_from_file(cmdline, gcx).await?
     }
-    // First attempt to parse V2 format
     match load_caps_from_buf_v2(&buf, &caps_url) {
-        Ok(caps_arc_v2) => {
-            // Read current models
-            let (chat_empty, completion_count) = {
-                let caps_lock = caps_arc_v2.read().unwrap();
-                (
-                    caps_lock.code_chat_models.is_empty(),
-                    caps_lock.code_completion_models.len(),
-                )
-            };
-
-            tracing::debug!(
-                "V2 caps: chat.models empty={}, completion.models count={}",
-                chat_empty,
-                completion_count
-            );
-
-            // If chat.models is empty but completion.models exist, use those for chat
-            if chat_empty && completion_count > 0 {
-                // Clone completion_models under a read lock
-                let completion_clone = {
-                    let caps_read = caps_arc_v2.read().unwrap();
-                    caps_read.code_completion_models.clone()
-                };
-
-                // Scope the write guard so it's dropped before we return
-                {
-                    let mut caps_write = caps_arc_v2.write().unwrap();
-                    caps_write.code_chat_models = completion_clone;
-                } // caps_write dropped here
-
-                // Log how many entries we populated
-                let new_count = caps_arc_v2.read().unwrap().code_chat_models.len();
-                info!(
-                    "V2 chat.models empty; populated code_chat_models from completion.models ({} entries)",
-                    new_count
-                );
-                return Ok(caps_arc_v2);
-            }
-
-            // If chat.models non-empty, return as-is
-            if !chat_empty {
-                return Ok(caps_arc_v2);
-            }
-
-            // Both chat.models and completion.models empty → fall back
-            info!("V2 chat.models and completion.models both empty; falling back to V1 format loader");
-        }
+        Ok(caps) => Ok(caps),
         Err(e) => {
-            info!("Cannot parse V2 caps (`{}`); falling back to V1 format loader", e);
+            info!("Cannot load v2 caps: `{}`, try old format", e);
+            load_caps_from_buf(&buf, &caps_url)
         }
     }
-
-    // Fallback to original V1 format
-    let caps_arc_v1 = load_caps_from_buf(&buf, &caps_url)?;
-    let v1_count = caps_arc_v1.read().unwrap().code_chat_models.len();
-    tracing::debug!(
-        "V1 caps loaded: code_chat_models count={}",
-        v1_count
-    );
-    Ok(caps_arc_v1)
 }
 
 pub fn strip_model_from_finetune(model: &String) -> String {
@@ -673,33 +618,22 @@ pub fn which_model_to_use<'a>(
     user_wants_model: &str,
     default_model: &str,
 ) -> Result<(String, &'a ModelRecord), String> {
-    // Determine desired model: user override > default > first available
-    let chosen = if !user_wants_model.is_empty() {
-        user_wants_model.to_string()
-    } else if !default_model.is_empty() {
-        default_model.to_string()
-    } else if let Some(first) = models.keys().next() {
-        first.clone()
+    let mut take_this_one = default_model;
+    if user_wants_model != "" {
+        take_this_one = user_wants_model;
+    }
+    let no_finetune = strip_model_from_finetune(&take_this_one.to_string());
+    if let Some(model_rec) = models.get(&take_this_one.to_string()) {
+        Ok((take_this_one.to_string(), model_rec))
+    } else if let Some(model_rec) = models.get(&no_finetune) {
+        Ok((take_this_one.to_string(), model_rec))
     } else {
-        return Err("No available models".to_string());
-    };
-
-    // Try exact match
-    if let Some(rec) = models.get(&chosen) {
-        return Ok((chosen, rec));
+        Err(format!(
+            "Model '{}' not found. Server has these models: {:?}",
+            take_this_one,
+            models.keys()
+        ))
     }
-    // Try stripped (finetune suffix removed) match
-    let stripped = strip_model_from_finetune(&chosen);
-    if let Some(rec) = models.get(&stripped) {
-        return Ok((chosen, rec));
-    }
-
-    // Not found
-    Err(format!(
-        "Model '{}' not found. Server has these models: {:?}",
-        chosen,
-        models.keys().collect::<Vec<_>>()
-    ))
 }
 
 pub fn which_scratchpad_to_use<'a>(
